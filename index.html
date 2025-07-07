@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tennis Match Generator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 16px; /* Set a base font size */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 80%;
+            max-width: 800px;
+        }
+        .input-group {
+            margin: 15px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        label {
+            font-weight: bold;
+        }
+        input[type="number"], select {
+            padding: 5px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 1em;
+            color: #fff;
+            background-color: #007bff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        table {
+            width: 100%;
+            margin-top: 20px;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .match-team {
+            cursor: pointer;
+            user-select: none; /* Prevents text selection on click */
+        }
+        .winner-cell {
+            background-color: #c8e6c9; /* A light green for the winner cell */
+        }
+        #error-message {
+            color: red;
+            margin-top: 10px;
+            font-weight: bold;
+        }
+        #resultsContainer {
+            width: 100%;
+            margin-top: 30px;
+        }
+        /* Responsive Design for Mobile */
+        @media (max-width: 600px) {
+            .container {
+                width: 95%;
+                padding: 15px;
+            }
+            .input-group {
+                flex-direction: column;
+                gap: 5px;
+                align-items: stretch;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+            /* Increase font size for better readability on mobile */
+            body {
+                font-size: 18px;
+            }
+            input, select, button {
+                font-size: 1em; /* Ensure form elements scale with body font */
+                padding: 10px;
+            }
+            /* Make tables horizontally scrollable on small screens */
+            .table-wrapper {
+                width: 100%;
+                overflow-x: auto;
+            }
+        }
+    </style>
+</head>
+<body> 
+    <div class="container">
+        <h1>Tennis Match Generator</h1>
+        <div class="controls">
+            <div class="input-group">
+                <label for="numPlayers">Number of Players:</label>
+                <input type="number" id="numPlayers" min="2" value="6">
+            </div>
+            <div class="input-group">
+                <label for="matchType">Match Type:</label>
+                <select id="matchType">
+                    <option value="single">Single</option>
+                    <option value="double" selected>Double</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label for="numCourts">Number of Courts:</label>
+                <input type="number" id="numCourts" min="1" value="1">
+            </div>
+            <button id="generateMatches">Generate Matches</button>
+            <div id="error-message"></div>
+        </div>
+        
+        <div class="table-wrapper">
+            <table id="matchTable">
+                <thead>
+                    <!-- Header will be generated here -->
+                </thead>
+                <tbody>
+                    <!-- Matches will be generated here -->
+                </tbody>
+            </table>
+        </div>
+        <div id="resultsContainer">
+            <!-- Player stats will be generated here -->
+        </div>
+    </div>
+    <script>
+        const numPlayersInput = document.getElementById('numPlayers');
+        const matchTypeSelect = document.getElementById('matchType');
+        const numCourtsInput = document.getElementById('numCourts');
+        const generateButton = document.getElementById('generateMatches');
+        const tableHead = document.querySelector('#matchTable thead');
+        const tableBody = document.querySelector('#matchTable tbody');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const errorMessageDiv = document.getElementById('error-message');
+
+        generateButton.addEventListener('click', generateSchedule);
+
+        function generateSchedule() {
+            const numPlayers = parseInt(numPlayersInput.value);
+            const matchType = matchTypeSelect.value;
+            const numCourts = parseInt(numCourtsInput.value);
+
+            // Clear previous results and errors
+            tableHead.innerHTML = '';
+            tableBody.innerHTML = '';
+            resultsContainer.innerHTML = '';
+            errorMessageDiv.textContent = '';
+
+            // --- Validation ---
+            if (isNaN(numPlayers) || isNaN(numCourts) || numPlayers < 2 || numCourts < 1) {
+                errorMessageDiv.textContent = 'Please enter valid numbers for players and courts.';
+                return;
+            }
+
+            if (matchType === 'double') {
+                if (numPlayers < 4) {
+                    errorMessageDiv.textContent = 'Doubles matches require at least 4 players.';
+                    return;
+                }
+            }
+
+            let schedule = [];
+            let gamesPlayed;
+
+            if (matchType === 'single') {
+                // --- Participant Generation for Singles ---
+                let participants = [];
+                for (let i = 1; i <= numPlayers; i++) {
+                    participants.push(`${i}`);
+                }
+
+                // --- Round Robin Match Generation for Singles ---
+                let players = [...participants];
+                if (players.length % 2 !== 0) {
+                    players.push('BYE');
+                }
+
+                const n = players.length;
+                for (let r = 0; r < n - 1; r++) {
+                    for (let i = 0; i < n / 2; i++) {
+                        const team1 = players[i];
+                        const team2 = players[n - 1 - i];
+                        if (team1 !== 'BYE' && team2 !== 'BYE') {
+                            schedule.push({
+                                team1: { text: team1, players: [parseInt(team1)] },
+                                team2: { text: team2, players: [parseInt(team2)] }
+                            });
+                        }
+                    }
+                    // Rotate players, keeping players[0] fixed.
+                    const lastPlayer = players.pop();
+                    players.splice(1, 0, lastPlayer);
+                }
+
+                // Calculate games played for singles
+                gamesPlayed = new Map();
+                for (let i = 1; i <= numPlayers; i++) {
+                    gamesPlayed.set(`${i}`, 0);
+                }
+                schedule.forEach(match => {
+                    match.team1.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
+                    match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
+                });
+            } else { // double
+                // --- Rotation-Based Match Generation for Doubles ---
+                // This logic is driven by systematically rotating which player rests,
+                // ensuring fair distribution of play and rest time.
+                const players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+
+                // --- Helper Functions ---
+                const generatePairs = (p_list) => {
+                    const pairs = [];
+                    for (let i = 0; i < p_list.length; i++)
+                        for (let j = i + 1; j < p_list.length; j++)
+                            pairs.push([p_list[i], p_list[j]]);
+                    return pairs;
+                };
+                const getPartnerKey = (p) => p.slice().sort().join('&');
+                const getMatchupKey = (p1, p2) => {
+                    const key1 = getPartnerKey(p1);
+                    const key2 = getPartnerKey(p2);
+                    return [key1, key2].sort().join('-');
+                };
+
+                // --- State Tracking ---
+                gamesPlayed = new Map(players.map(p => [p, 0]));
+                const partnershipCount = new Map();
+                const matchupCount = new Map();
+
+                // --- Main Scheduling Loop ---
+                // The loop continues until we have 15 matches. The loop counter `i` drives the rotation of the resting player.
+                for (let i = 0; schedule.length < 15; i++) {
+                    // 1. Determine the resting player based on a descending rotation.
+                    const restingPlayer = players[numPlayers - 1 - (i % numPlayers)];
+                    const activePlayers = players.filter(p => p !== restingPlayer);
+
+                    // We need at least 4 active players to form a match.
+                    if (activePlayers.length < 4) {
+                        // This case should not be hit with the initial validation (min 4 players),
+                        // but it's a safeguard. If we can't form a match, we stop.
+                        break;
+                    }
+
+                    // 2. Find all possible valid matches from the pool of active players.
+                    let possibleMatches = [];
+                    const activePairs = generatePairs(activePlayers);
+
+                    for (let p_idx1 = 0; p_idx1 < activePairs.length; p_idx1++) {
+                        for (let p_idx2 = p_idx1 + 1; p_idx2 < activePairs.length; p_idx2++) {
+                            const team1 = activePairs[p_idx1];
+                            const team2 = activePairs[p_idx2];
+                            // A valid match requires 4 unique players.
+                            if (new Set([...team1, ...team2]).size === 4) {
+                                // Calculate a "cost" for this potential match. Lower is better.
+                                const gameCost = [...team1, ...team2].reduce((acc, p) => acc + gamesPlayed.get(p), 0);
+                                const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
+                                const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
+                                const matchupKey = getMatchupKey(team1, team2);
+                                const matchupCost = matchupCount.get(matchupKey) || 0;
+                                
+                                // Penalize reusing partners, and penalize reusing a specific matchup even more heavily.
+                                const totalCost = gameCost + (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
+
+                                possibleMatches.push({ match: [team1, team2], cost: totalCost });
+                            }
+                        }
+                    }
+
+                    if (possibleMatches.length === 0) {
+                        // If no matches can be formed with the current active players, stop generating.
+                        break; 
+                    }
+
+                    // 3. Select the best match (lowest cost) from the possibilities.
+                    possibleMatches.sort((a, b) => a.cost - b.cost);
+                    const bestMatch = possibleMatches[0];
+                    const [team1, team2] = bestMatch.match;
+                    schedule.push({
+                        team1: { text: `${team1[0]} & ${team1[1]}`, players: team1 },
+                        team2: { text: `${team2[0]} & ${team2[1]}`, players: team2 }
+                    });
+
+                    // 4. Update state tracking for the next iteration.
+                    [...team1, ...team2].forEach(p => gamesPlayed.set(p, gamesPlayed.get(p) + 1));
+                    const key1 = getPartnerKey(team1);
+                    const key2 = getPartnerKey(team2);
+                    partnershipCount.set(key1, (partnershipCount.get(key1) || 0) + 1);
+                    partnershipCount.set(key2, (partnershipCount.get(key2) || 0) + 1);
+                    const matchupKey = getMatchupKey(team1, team2);
+                    matchupCount.set(matchupKey, (matchupCount.get(matchupKey) || 0) + 1);
+                }
+            }
+
+            // --- Initial Display ---
+            const allPlayerIds = Array.from({ length: numPlayers }, (_, i) => `${i + 1}`);
+            displayResults(allPlayerIds);
+            if (schedule.length === 0) {
+                errorMessageDiv.textContent = 'No matches to generate with the given settings.';
+                return;
+            }
+
+            // --- Generate Table Header ---
+            let headerHTML = '<tr>';
+            if (numCourts > 1) {
+                headerHTML += '<th>Court</th>';
+            }
+            headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
+            tableHead.innerHTML = headerHTML;
+
+            // --- Generate Table Body ---
+            let matchIndex = 0;
+            while (matchIndex < schedule.length) {
+                // This loop implicitly defines a "display round"
+                for (let courtNum = 1; courtNum <= numCourts; courtNum++) {
+                    if (matchIndex >= schedule.length) break;
+
+                    const match = schedule[matchIndex];
+                    const row = tableBody.insertRow();
+                    let rowHTML = '';
+                    if (numCourts > 1) {
+                        rowHTML += `<td>${courtNum}</td>`;
+                    }
+                    rowHTML += `<td class="match-team" data-players="${match.team1.players.join(',')}">${match.team1.text}</td>`;
+                    rowHTML += `<td class="match-team" data-players="${match.team2.players.join(',')}">${match.team2.text}</td>`;
+                    row.innerHTML = rowHTML;
+                    matchIndex++;
+                }
+            }
+        }
+
+        function displayResults(playerIds) {
+            resultsContainer.innerHTML = `
+                <h2>Player Stats</h2>
+                <div class="table-wrapper">
+                    <table id="resultsTable">
+                        <thead>
+                            <tr><th>Player</th><th>Games Played</th><th>Wins</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            `;
+            const resultsTableBody = document.querySelector('#resultsTable tbody');
+
+            for (const player of playerIds) {
+                const row = resultsTableBody.insertRow();
+                row.innerHTML = `<td>Player ${player}</td><td id="played-player-${player}">0</td><td id="wins-player-${player}">0</td>`;
+            }
+        }
+
+        // Generate on page load with default values
+        generateSchedule();
+
+        // Add a single event listener to the table body for handling clicks on teams.
+        tableBody.addEventListener('click', (event) => {
+            const clickedCell = event.target.closest('.match-team');
+            if (!clickedCell) return;
+
+            const row = clickedCell.parentElement;
+            const isAlreadyWinner = clickedCell.classList.contains('winner-cell');
+            const allTeamCellsInRow = Array.from(row.querySelectorAll('.match-team'));
+
+            // Helper function to update a player's stat (wins or played)
+            const updateStat = (playerId, statType, delta) => {
+                const cell = document.getElementById(`${statType}-player-${playerId}`);
+                if (cell) cell.textContent = parseInt(cell.textContent) + delta;
+            };
+
+            // Helper function to update stats for all players in a team cell
+            const updatePlayersStats = (teamCell, statType, delta) => {
+                const playerIds = teamCell.dataset.players.split(',');
+                playerIds.forEach(id => updateStat(id, statType, delta));
+            };
+
+            if (isAlreadyWinner) {
+                // --- CASE 1: UNSELECTING a winner (toggle off) ---
+                clickedCell.classList.remove('winner-cell');
+
+                // Decrement wins for the unselected team
+                updatePlayersStats(clickedCell, 'wins', -1);
+                // Decrement games played for ALL players in the match
+                allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', -1));
+            } else {
+                // --- CASE 2: SELECTING a new winner (or changing winner) ---
+                const oldWinnerCell = allTeamCellsInRow.find(cell => cell.classList.contains('winner-cell'));
+
+                if (oldWinnerCell) {
+                    // This is a CHANGE of winner
+                    oldWinnerCell.classList.remove('winner-cell');
+                    updatePlayersStats(oldWinnerCell, 'wins', -1); // Decrement wins for the old winner
+                } else {
+                    // This is the FIRST winner selected for this match
+                    allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', 1)); // Increment games played for ALL players
+                }
+
+                // Set the new winner
+                clickedCell.classList.add('winner-cell');
+                updatePlayersStats(clickedCell, 'wins', 1); // Increment wins for the new winner
+            }
+        });
+    </script>
+</body>
+</html>
