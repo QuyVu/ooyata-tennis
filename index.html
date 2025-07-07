@@ -71,6 +71,18 @@
         .winner-cell {
             background-color: #c8e6c9; /* A light green for the winner cell */
         }
+        .current-game {
+            background-color: #fff59d; /* A darker yellow for the current game */
+        }
+        .current-game-marker {
+            cursor: pointer;
+            width: 30px;
+            font-size: 1.2em;
+            color: #28a745; /* A 'go' green color */
+        }
+        .completed-game-marker {
+            color: #000000; /* Black color for the checkmark */
+        }
         #error-message {
             color: red;
             margin-top: 10px;
@@ -325,6 +337,7 @@
 
             // --- Generate Table Header ---
             let headerHTML = '<tr>';
+            headerHTML += '<th></th>'; // For the current game marker
             if (numCourts > 1) {
                 headerHTML += '<th>Court</th>';
             }
@@ -341,6 +354,7 @@
                     const match = schedule[matchIndex];
                     const row = tableBody.insertRow();
                     let rowHTML = '';
+                    rowHTML += '<td class="current-game-marker"></td>';
                     if (numCourts > 1) {
                         rowHTML += `<td>${courtNum}</td>`;
                     }
@@ -349,6 +363,13 @@
                     row.innerHTML = rowHTML;
                     matchIndex++;
                 }
+            }
+
+            // --- Set initial current game ---
+            const firstMatchRow = tableBody.querySelector('tr');
+            if (firstMatchRow) {
+                firstMatchRow.classList.add('current-game');
+                updateRowMarker(firstMatchRow);
             }
         }
 
@@ -372,54 +393,101 @@
             }
         }
 
+        function updateRowMarker(row) {
+            const markerCell = row.querySelector('.current-game-marker');
+            if (!markerCell) return;
+
+            const isCurrent = row.classList.contains('current-game');
+            const hasWinner = row.querySelector('.winner-cell');
+
+            if (isCurrent) {
+                markerCell.textContent = '▶';
+                markerCell.classList.remove('completed-game-marker');
+            } else if (hasWinner) {
+                markerCell.textContent = '✓';
+                markerCell.classList.add('completed-game-marker');
+            } else {
+                markerCell.textContent = '';
+                markerCell.classList.remove('completed-game-marker');
+            }
+        }
+
         // Generate on page load with default values
         generateSchedule();
 
         // Add a single event listener to the table body for handling clicks on teams.
         tableBody.addEventListener('click', (event) => {
-            const clickedCell = event.target.closest('.match-team');
-            if (!clickedCell) return;
+            const target = event.target;
 
-            const row = clickedCell.parentElement;
-            const isAlreadyWinner = clickedCell.classList.contains('winner-cell');
-            const allTeamCellsInRow = Array.from(row.querySelectorAll('.match-team'));
+            // --- Handle setting the current game via marker click ---
+            if (target.classList.contains('current-game-marker')) {
+                const newCurrentRow = target.parentElement;
+                const oldCurrentRow = tableBody.querySelector('.current-game');
 
-            // Helper function to update a player's stat (wins or played)
-            const updateStat = (playerId, statType, delta) => {
-                const cell = document.getElementById(`${statType}-player-${playerId}`);
-                if (cell) cell.textContent = parseInt(cell.textContent) + delta;
-            };
+                if (newCurrentRow === oldCurrentRow) return; // Clicked the same row, do nothing.
 
-            // Helper function to update stats for all players in a team cell
-            const updatePlayersStats = (teamCell, statType, delta) => {
-                const playerIds = teamCell.dataset.players.split(',');
-                playerIds.forEach(id => updateStat(id, statType, delta));
-            };
-
-            if (isAlreadyWinner) {
-                // --- CASE 1: UNSELECTING a winner (toggle off) ---
-                clickedCell.classList.remove('winner-cell');
-
-                // Decrement wins for the unselected team
-                updatePlayersStats(clickedCell, 'wins', -1);
-                // Decrement games played for ALL players in the match
-                allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', -1));
-            } else {
-                // --- CASE 2: SELECTING a new winner (or changing winner) ---
-                const oldWinnerCell = allTeamCellsInRow.find(cell => cell.classList.contains('winner-cell'));
-
-                if (oldWinnerCell) {
-                    // This is a CHANGE of winner
-                    oldWinnerCell.classList.remove('winner-cell');
-                    updatePlayersStats(oldWinnerCell, 'wins', -1); // Decrement wins for the old winner
-                } else {
-                    // This is the FIRST winner selected for this match
-                    allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', 1)); // Increment games played for ALL players
+                if (oldCurrentRow) {
+                    oldCurrentRow.classList.remove('current-game');
+                    updateRowMarker(oldCurrentRow);
                 }
 
-                // Set the new winner
-                clickedCell.classList.add('winner-cell');
-                updatePlayersStats(clickedCell, 'wins', 1); // Increment wins for the new winner
+                newCurrentRow.classList.add('current-game');
+                updateRowMarker(newCurrentRow);
+                return; // Action is complete
+            }
+
+            // --- Handle selecting a winner via team click ---
+            const teamCell = target.closest('.match-team');
+            if (teamCell) {
+                const row = teamCell.parentElement;
+                const isAlreadyWinner = teamCell.classList.contains('winner-cell');
+                const allTeamCellsInRow = Array.from(row.querySelectorAll('.match-team'));
+
+                // Helper function to update a player's stat (wins or played)
+                const updateStat = (playerId, statType, delta) => {
+                    const cell = document.getElementById(`${statType}-player-${playerId}`);
+                    if (cell) cell.textContent = parseInt(cell.textContent) + delta;
+                };
+
+                // Helper function to update stats for all players in a team cell
+                const updatePlayersStats = (teamCell, statType, delta) => {
+                    const playerIds = teamCell.dataset.players.split(',');
+                    playerIds.forEach(id => updateStat(id, statType, delta));
+                };
+
+                if (isAlreadyWinner) {
+                    // --- CASE 1: UNSELECTING a winner (toggle off) ---
+                    teamCell.classList.remove('winner-cell');
+                    updatePlayersStats(teamCell, 'wins', -1);
+                    allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', -1));
+                } else {
+                    // --- CASE 2: SELECTING a new winner (or changing winner) ---
+                    const isCurrentGame = row.classList.contains('current-game');
+                    const oldWinnerCell = allTeamCellsInRow.find(cell => cell.classList.contains('winner-cell'));
+                    let wasFirstTimePlay = false;
+
+                    if (oldWinnerCell) {
+                        oldWinnerCell.classList.remove('winner-cell');
+                        updatePlayersStats(oldWinnerCell, 'wins', -1);
+                    } else {
+                        wasFirstTimePlay = true;
+                        allTeamCellsInRow.forEach(cell => updatePlayersStats(cell, 'played', 1));
+                    }
+
+                    teamCell.classList.add('winner-cell');
+                    updatePlayersStats(teamCell, 'wins', 1);
+
+                    if (isCurrentGame && wasFirstTimePlay) {
+                        const nextRow = row.nextElementSibling;
+                        row.classList.remove('current-game');
+                        updateRowMarker(row);
+                        if (nextRow) {
+                            nextRow.classList.add('current-game');
+                            updateRowMarker(nextRow);
+                        }
+                    }
+                }
+                updateRowMarker(row);
             }
         });
     </script>
