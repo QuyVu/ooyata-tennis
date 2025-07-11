@@ -158,7 +158,12 @@
         <div id="resultsContainer">
             <!-- Player stats will be generated here -->
         </div>
+        <div id="qrcode-container" style="margin-top: 20px;">
+            <button id="generateQrCode">Share Match Link</button>
+            <div id="qrcode" style="margin-top: 10px; display: flex; justify-content: center;"></div>
+        </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <script>
         const numPlayersInput = document.getElementById('numPlayers');
         const matchTypeSelect = document.getElementById('matchType');
@@ -168,8 +173,25 @@
         const tableBody = document.querySelector('#matchTable tbody');
         const resultsContainer = document.getElementById('resultsContainer');
         const errorMessageDiv = document.getElementById('error-message');
+        const generateQrButton = document.getElementById('generateQrCode');
+        const qrcodeDiv = document.getElementById('qrcode');
+
+        let qrCodeInstance = null;
 
         generateButton.addEventListener('click', generateSchedule);
+        generateQrButton.addEventListener('click', () => {
+            // Clear previous QR code
+            qrcodeDiv.innerHTML = '';
+            // Generate new QR code with current URL
+            qrCodeInstance = new QRCode(qrcodeDiv, {
+                text: window.location.href,
+                width: 128,
+                height: 128,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        });
 
         function generateSchedule() {
             const numPlayers = parseInt(numPlayersInput.value);
@@ -238,19 +260,11 @@
                     match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
                 });
             } else { // double
-                // --- Rotation-Based Match Generation for Doubles ---
-                // This logic is driven by systematically rotating which player rests,
-                // ensuring fair distribution of play and rest time.
+                // --- FIFO Rotation-Based Match Generation for Doubles ---
                 const players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+                const playersPerMatch = 4;
 
                 // --- Helper Functions ---
-                const generatePairs = (p_list) => {
-                    const pairs = [];
-                    for (let i = 0; i < p_list.length; i++)
-                        for (let j = i + 1; j < p_list.length; j++)
-                            pairs.push([p_list[i], p_list[j]]);
-                    return pairs;
-                };
                 const getPartnerKey = (p) => p.slice().sort().join('&');
                 const getMatchupKey = (p1, p2) => {
                     const key1 = getPartnerKey(p1);
@@ -263,52 +277,48 @@
                 const partnershipCount = new Map();
                 const matchupCount = new Map();
 
+                // --- Initialize Queues ---
+                let playingQueue = players.slice(0, playersPerMatch);
+                let restingQueue = players.slice(playersPerMatch);
+
                 // --- Main Scheduling Loop ---
-                // The loop continues until we have 15 matches. The loop counter `i` drives the rotation of the resting player.
-                for (let i = 0; schedule.length < 15; i++) {
-                    // 1. Determine the resting player based on a descending rotation.
-                    const restingPlayer = players[numPlayers - 1 - (i % numPlayers)];
-                    const activePlayers = players.filter(p => p !== restingPlayer);
+                const numMatchesToGenerate = 15;
+                for (let i = 0; i < numMatchesToGenerate && schedule.length < numMatchesToGenerate; i++) {
+                    const activePlayers = [...playingQueue];
 
-                    // We need at least 4 active players to form a match.
                     if (activePlayers.length < 4) {
-                        // This case should not be hit with the initial validation (min 4 players),
-                        // but it's a safeguard. If we can't form a match, we stop.
-                        break;
+                        break; // Safeguard
                     }
 
-                    // 2. Find all possible valid matches from the pool of active players.
+                    // 1. Find all possible pairings for the 4 active players and calculate their cost.
                     let possibleMatches = [];
-                    const activePairs = generatePairs(activePlayers);
+                    const p = activePlayers;
+                    const matchVariations = [
+                        [[p[0], p[1]], [p[2], p[3]]],
+                        [[p[0], p[2]], [p[1], p[3]]],
+                        [[p[0], p[3]], [p[1], p[2]]]
+                    ];
 
-                    for (let p_idx1 = 0; p_idx1 < activePairs.length; p_idx1++) {
-                        for (let p_idx2 = p_idx1 + 1; p_idx2 < activePairs.length; p_idx2++) {
-                            const team1 = activePairs[p_idx1];
-                            const team2 = activePairs[p_idx2];
-                            // A valid match requires 4 unique players.
-                            if (new Set([...team1, ...team2]).size === 4) {
-                                // Calculate a "cost" for this potential match. Lower is better.
-                                const gameCost = [...team1, ...team2].reduce((acc, p) => acc + gamesPlayed.get(p), 0);
-                                const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
-                                const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
-                                const matchupKey = getMatchupKey(team1, team2);
-                                const matchupCost = matchupCount.get(matchupKey) || 0;
-                                
-                                // Penalize reusing partners, and penalize reusing a specific matchup even more heavily.
-                                const totalCost = gameCost + (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
+                    for (const match of matchVariations) {
+                        const [team1, team2] = match;
+                        const gameCost = activePlayers.reduce((acc, player) => acc + gamesPlayed.get(player), 0);
+                        const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
+                        const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
+                        const matchupKey = getMatchupKey(team1, team2);
+                        const matchupCost = matchupCount.get(matchupKey) || 0;
+                        
+                        const totalCost = gameCost + (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
 
-                                possibleMatches.push({ match: [team1, team2], cost: totalCost });
-                            }
-                        }
+                        possibleMatches.push({ match: [team1, team2], cost: totalCost });
                     }
 
-                    if (possibleMatches.length === 0) {
-                        // If no matches can be formed with the current active players, stop generating.
-                        break; 
-                    }
-
-                    // 3. Select the best match (lowest cost) from the possibilities.
+                    // 2. Select the best match (lowest cost) from the possibilities.
                     possibleMatches.sort((a, b) => a.cost - b.cost);
+                    
+                    if (possibleMatches.length === 0) {
+                        break; // Should not be reached if numPlayers >= 4
+                    }
+
                     const bestMatch = possibleMatches[0];
                     const [team1, team2] = bestMatch.match;
                     schedule.push({
@@ -316,7 +326,7 @@
                         team2: { text: `${team2[0]} & ${team2[1]}`, players: team2 }
                     });
 
-                    // 4. Update state tracking for the next iteration.
+                    // 3. Update state tracking for the next iteration.
                     [...team1, ...team2].forEach(p => gamesPlayed.set(p, gamesPlayed.get(p) + 1));
                     const key1 = getPartnerKey(team1);
                     const key2 = getPartnerKey(team2);
@@ -324,6 +334,14 @@
                     partnershipCount.set(key2, (partnershipCount.get(key2) || 0) + 1);
                     const matchupKey = getMatchupKey(team1, team2);
                     matchupCount.set(matchupKey, (matchupCount.get(matchupKey) || 0) + 1);
+
+                    // 4. Rotate players for the next game (FIFO).
+                    if (restingQueue.length > 0) {
+                        const playerToRest = playingQueue.shift();
+                        const playerToPlay = restingQueue.shift();
+                        playingQueue.push(playerToPlay);
+                        restingQueue.push(playerToRest);
+                    }
                 }
             }
 
