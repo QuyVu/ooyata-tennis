@@ -260,9 +260,8 @@
                     match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
                 });
             } else { // double
-                // --- FIFO Rotation-Based Match Generation for Doubles ---
+                // --- Fair Play Algorithm for Doubles ---
                 const players = Array.from({ length: numPlayers }, (_, i) => i + 1);
-                const playersPerMatch = 4;
 
                 // --- Helper Functions ---
                 const getPartnerKey = (p) => p.slice().sort().join('&');
@@ -276,21 +275,59 @@
                 gamesPlayed = new Map(players.map(p => [p, 0]));
                 const partnershipCount = new Map();
                 const matchupCount = new Map();
+                const consecutiveGames = new Map(players.map(p => [p, 0]));
 
-                // --- Initialize Queues ---
-                let playingQueue = players.slice(0, playersPerMatch);
-                let restingQueue = players.slice(playersPerMatch);
+                // --- Calculate number of matches for fair distribution ---
+                // 1. Find the minimum number of games per player (k) for a balanced set of matches.
+                let minGamesPerPlayer = (numPlayers % 4 === 0) ? 1 : (numPlayers % 2 === 0) ? 2 : 4;
+
+                // 2. Aim for a target of at least 4 games per player for a good session length.
+                let targetGamesPerPlayer = minGamesPerPlayer;
+                if (targetGamesPerPlayer < 4) {
+                    // Multiply rounds to get closer to the target
+                    targetGamesPerPlayer *= Math.ceil(4 / targetGamesPerPlayer);
+                }
+                
+                let numMatchesToGenerate = (numPlayers * targetGamesPerPlayer) / 4;
+
+                // 3. Ensure there are at least 15 matches in total for a substantial session.
+                const minTotalMatches = 15;
+                if (numMatchesToGenerate < minTotalMatches) {
+                    const minMatchesPerRound = (numPlayers * minGamesPerPlayer) / 4;
+                    if (minMatchesPerRound > 0) { // Avoid division by zero
+                        const roundsNeeded = Math.ceil(minTotalMatches / minMatchesPerRound);
+                        numMatchesToGenerate = minMatchesPerRound * roundsNeeded;
+                    } else {
+                        numMatchesToGenerate = 0; // Should not happen with validation
+                    }
+                }
 
                 // --- Main Scheduling Loop ---
-                const numMatchesToGenerate = 15;
-                for (let i = 0; i < numMatchesToGenerate && schedule.length < numMatchesToGenerate; i++) {
-                    const activePlayers = [...playingQueue];
+                for (let i = 0; i < numMatchesToGenerate; i++) {
+                    // 1. Select the 4 players based on rest priority and then fewest games.
+                    const sortedPlayers = [...players].sort((a, b) => {
+                        const streakA = consecutiveGames.get(a) || 0;
+                        const streakB = consecutiveGames.get(b) || 0;
+                        if (streakA !== streakB) {
+                            return streakA - streakB; // Prioritize players with shorter streaks (more rest).
+                        }
+
+                        const gamesA = gamesPlayed.get(a);
+                        const gamesB = gamesPlayed.get(b);
+                        if (gamesA !== gamesB) {
+                            return gamesA - gamesB; // Then, prioritize players with fewer total games.
+                        }
+                        
+                        // Tie-break with a random factor to vary player selection in case of ties
+                        return Math.random() - 0.5;
+                    });
+                    const activePlayers = sortedPlayers.slice(0, 4);
 
                     if (activePlayers.length < 4) {
                         break; // Safeguard
                     }
 
-                    // 1. Find all possible pairings for the 4 active players and calculate their cost.
+                    // 2. Find all possible pairings for the active players and calculate their cost.
                     let possibleMatches = [];
                     const p = activePlayers;
                     const matchVariations = [
@@ -301,47 +338,55 @@
 
                     for (const match of matchVariations) {
                         const [team1, team2] = match;
-                        const gameCost = activePlayers.reduce((acc, player) => acc + gamesPlayed.get(player), 0);
+                        // Cost function now only needs to focus on partnership and matchup history,
+                        // as game balance is handled by the player selection process.
                         const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
                         const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
                         const matchupKey = getMatchupKey(team1, team2);
                         const matchupCost = matchupCount.get(matchupKey) || 0;
                         
-                        const totalCost = gameCost + (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
+                        const totalCost = (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
 
                         possibleMatches.push({ match: [team1, team2], cost: totalCost });
                     }
 
-                    // 2. Select the best match (lowest cost) from the possibilities.
+                    // 3. Select the best match (lowest cost) from the possibilities.
                     possibleMatches.sort((a, b) => a.cost - b.cost);
                     
                     if (possibleMatches.length === 0) {
-                        break; // Should not be reached if numPlayers >= 4
+                        break; // Should not be reached
                     }
 
                     const bestMatch = possibleMatches[0];
                     const [team1, team2] = bestMatch.match;
+
+                    // Sort players within each team for consistent display
+                    team1.sort((a, b) => a - b);
+                    team2.sort((a, b) => a - b);
+
                     schedule.push({
                         team1: { text: `${team1[0]} & ${team1[1]}`, players: team1 },
                         team2: { text: `${team2[0]} & ${team2[1]}`, players: team2 }
                     });
 
-                    // 3. Update state tracking for the next iteration.
-                    [...team1, ...team2].forEach(p => gamesPlayed.set(p, gamesPlayed.get(p) + 1));
+                    // 4. Update state tracking for the next iteration.
+                    const playingPlayerIds = new Set([...team1, ...team2]);
+                    
+                    players.forEach(p => {
+                        if (playingPlayerIds.has(p)) {
+                            gamesPlayed.set(p, gamesPlayed.get(p) + 1);
+                            consecutiveGames.set(p, (consecutiveGames.get(p) || 0) + 1);
+                        } else {
+                            consecutiveGames.set(p, 0); // Reset streak for resting players
+                        }
+                    });
+
                     const key1 = getPartnerKey(team1);
                     const key2 = getPartnerKey(team2);
                     partnershipCount.set(key1, (partnershipCount.get(key1) || 0) + 1);
                     partnershipCount.set(key2, (partnershipCount.get(key2) || 0) + 1);
                     const matchupKey = getMatchupKey(team1, team2);
                     matchupCount.set(matchupKey, (matchupCount.get(matchupKey) || 0) + 1);
-
-                    // 4. Rotate players for the next game (FIFO).
-                    if (restingQueue.length > 0) {
-                        const playerToRest = playingQueue.shift();
-                        const playerToPlay = restingQueue.shift();
-                        playingQueue.push(playerToPlay);
-                        restingQueue.push(playerToRest);
-                    }
                 }
             }
 
