@@ -178,7 +178,17 @@
 
         let qrCodeInstance = null;
 
-        generateButton.addEventListener('click', generateSchedule);
+        generateButton.addEventListener('click', () => {
+            // Only show confirmation if a schedule already exists in the UI.
+            if (tableBody.innerHTML.trim() !== '') {
+                if (confirm('Are you sure you want to generate a new schedule? This will erase the current one.')) {
+                    generateSchedule();
+                }
+            } else {
+                // If no schedule is displayed, generate one without asking.
+                generateSchedule();
+            }
+        });
         generateQrButton.addEventListener('click', () => {
             // Clear previous QR code
             qrcodeDiv.innerHTML = '';
@@ -434,6 +444,7 @@
                 firstMatchRow.classList.add('current-game');
                 updateRowMarker(firstMatchRow);
             }
+            saveState();
         }
 
         function displayResults(playerIds) {
@@ -475,8 +486,74 @@
             }
         }
 
-        // Generate on page load with default values
-        generateSchedule();
+        function updateRowMarker(row) {
+            const markerCell = row.querySelector('.current-game-marker');
+            if (!markerCell) return;
+
+            const isCurrent = row.classList.contains('current-game');
+            const hasWinner = row.querySelector('.winner-cell');
+
+            if (isCurrent) {
+                markerCell.textContent = '▶';
+                markerCell.classList.remove('completed-game-marker');
+            } else if (hasWinner) {
+                markerCell.textContent = '✓';
+                markerCell.classList.add('completed-game-marker');
+            } else {
+                markerCell.textContent = '';
+                markerCell.classList.remove('completed-game-marker');
+            }
+        }
+
+        function saveState() {
+            if (!tableBody.innerHTML) { // Don't save an empty state
+                localStorage.removeItem('tennisMatchState');
+                return;
+            }
+            const currentRow = tableBody.querySelector('.current-game');
+            const state = {
+                numPlayers: numPlayersInput.value,
+                matchType: matchTypeSelect.value,
+                numCourts: numCourtsInput.value,
+                tableBodyHTML: tableBody.innerHTML,
+                resultsContainerHTML: resultsContainer.innerHTML,
+                // Find the index of the current row to restore the marker
+                currentRowIndex: currentRow ? Array.from(tableBody.children).indexOf(currentRow) : -1
+            };
+            localStorage.setItem('tennisMatchState', JSON.stringify(state));
+        }
+
+        function loadState() {
+            const savedStateJSON = localStorage.getItem('tennisMatchState');
+            if (savedStateJSON) {
+                const savedState = JSON.parse(savedStateJSON);
+                numPlayersInput.value = savedState.numPlayers;
+                matchTypeSelect.value = savedState.matchType;
+                numCourtsInput.value = savedState.numCourts;
+                resultsContainer.innerHTML = savedState.resultsContainerHTML;
+                
+                // Generate header since it's not saved
+                let headerHTML = '<tr>';
+                headerHTML += '<th></th>'; // For the current game marker
+                if (savedState.numCourts > 1) {
+                    headerHTML += '<th>Court</th>';
+                }
+                headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
+                tableHead.innerHTML = headerHTML;
+
+                tableBody.innerHTML = savedState.tableBodyHTML;
+
+                // The class 'current-game' is already saved in the HTML, so we just need to ensure the marker is correct.
+                // All rows will be updated by this loop.
+                tableBody.querySelectorAll('tr').forEach(row => updateRowMarker(row));
+
+            } else {
+                generateSchedule();
+            }
+        }
+
+        // Generate on page load with default values or from storage
+        loadState();
 
         // Add a single event listener to the table body for handling clicks on teams.
         tableBody.addEventListener('click', (event) => {
@@ -496,6 +573,7 @@
 
                 newCurrentRow.classList.add('current-game');
                 updateRowMarker(newCurrentRow);
+                saveState();
                 return; // Action is complete
             }
 
@@ -551,6 +629,7 @@
                     }
                 }
                 updateRowMarker(row);
+                saveState();
             }
         });
     </script>
