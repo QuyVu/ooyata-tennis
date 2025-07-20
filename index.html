@@ -163,7 +163,6 @@
             <div id="qrcode" style="margin-top: 10px; display: flex; justify-content: center;"></div>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <script>
         const numPlayersInput = document.getElementById('numPlayers');
         const matchTypeSelect = document.getElementById('matchType');
@@ -177,18 +176,23 @@
         const qrcodeDiv = document.getElementById('qrcode');
 
         let qrCodeInstance = null;
+        let scheduleGenerationSeedOffset = 0;
 
         generateButton.addEventListener('click', () => {
-            // Only show confirmation if a schedule already exists in the UI.
+            const generate = () => {
+                scheduleGenerationSeedOffset++;
+                generateSchedule();
+            };
+
             if (tableBody.innerHTML.trim() !== '') {
                 if (confirm('Are you sure you want to generate a new schedule? This will erase the current one.')) {
-                    generateSchedule();
+                    generate();
                 }
             } else {
-                // If no schedule is displayed, generate one without asking.
-                generateSchedule();
+                generate();
             }
         });
+
         generateQrButton.addEventListener('click', () => {
             // Clear previous QR code
             qrcodeDiv.innerHTML = '';
@@ -202,6 +206,36 @@
                 correctLevel : QRCode.CorrectLevel.H
             });
         });
+
+        function generateTableHeader() {
+            const numCourts = parseInt(numCourtsInput.value);
+            let headerHTML = '<tr>';
+            headerHTML += '<th></th>'; // For the current game marker
+            if (numCourts > 1) {
+                headerHTML += '<th>Court</th>';
+            }
+            headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
+            tableHead.innerHTML = headerHTML;
+        }
+
+        function createSeededRandom(seed) {
+            let state = seed;
+            return function() {
+                state = (state * 9301 + 49297) % 233280;
+                return state / 233280;
+            };
+        }
+
+        function seededShuffle(array, random) {
+            let currentIndex = array.length, randomIndex;
+
+            while (currentIndex !== 0) {
+                randomIndex = Math.floor(random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
+        }
 
         function generateSchedule() {
             const numPlayers = parseInt(numPlayersInput.value);
@@ -270,8 +304,13 @@
                     match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
                 });
             } else { // double
-                // --- Fair Play Algorithm for Doubles ---
-                const players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+                // --- Seeded Shuffle for daily consistent randomness ---
+                let players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+                const today = new Date();
+                const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+                const seed = dateSeed * 1000 + scheduleGenerationSeedOffset;
+                const seededRandom = createSeededRandom(seed);
+                players = seededShuffle(players, seededRandom);
 
                 // --- Helper Functions ---
                 const getPartnerKey = (p) => p.slice().sort().join('&');
@@ -283,9 +322,9 @@
 
                 // --- State Tracking ---
                 gamesPlayed = new Map(players.map(p => [p, 0]));
+                const consecutiveGames = new Map(players.map(p => [p, 0])); // For rest priority
                 const partnershipCount = new Map();
                 const matchupCount = new Map();
-                const consecutiveGames = new Map(players.map(p => [p, 0]));
 
                 // --- Calculate number of matches for fair distribution ---
                 // 1. Find the minimum number of games per player (k) for a balanced set of matches.
@@ -329,7 +368,7 @@
                         }
                         
                         // Tie-break with a random factor to vary player selection in case of ties
-                        return Math.random() - 0.5;
+                        return seededRandom() - 0.5;
                     });
                     const activePlayers = sortedPlayers.slice(0, 4);
 
@@ -409,13 +448,7 @@
             }
 
             // --- Generate Table Header ---
-            let headerHTML = '<tr>';
-            headerHTML += '<th></th>'; // For the current game marker
-            if (numCourts > 1) {
-                headerHTML += '<th>Court</th>';
-            }
-            headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
-            tableHead.innerHTML = headerHTML;
+            generateTableHeader();
 
             // --- Generate Table Body ---
             let matchIndex = 0;
@@ -486,25 +519,6 @@
             }
         }
 
-        function updateRowMarker(row) {
-            const markerCell = row.querySelector('.current-game-marker');
-            if (!markerCell) return;
-
-            const isCurrent = row.classList.contains('current-game');
-            const hasWinner = row.querySelector('.winner-cell');
-
-            if (isCurrent) {
-                markerCell.textContent = '▶';
-                markerCell.classList.remove('completed-game-marker');
-            } else if (hasWinner) {
-                markerCell.textContent = '✓';
-                markerCell.classList.add('completed-game-marker');
-            } else {
-                markerCell.textContent = '';
-                markerCell.classList.remove('completed-game-marker');
-            }
-        }
-
         function saveState() {
             if (!tableBody.innerHTML) { // Don't save an empty state
                 localStorage.removeItem('tennisMatchState');
@@ -518,7 +532,8 @@
                 tableBodyHTML: tableBody.innerHTML,
                 resultsContainerHTML: resultsContainer.innerHTML,
                 // Find the index of the current row to restore the marker
-                currentRowIndex: currentRow ? Array.from(tableBody.children).indexOf(currentRow) : -1
+                currentRowIndex: currentRow ? Array.from(tableBody.children).indexOf(currentRow) : -1,
+                timestamp: new Date().getTime()
             };
             localStorage.setItem('tennisMatchState', JSON.stringify(state));
         }
@@ -526,34 +541,36 @@
         function loadState() {
             const savedStateJSON = localStorage.getItem('tennisMatchState');
             if (savedStateJSON) {
-                const savedState = JSON.parse(savedStateJSON);
-                numPlayersInput.value = savedState.numPlayers;
-                matchTypeSelect.value = savedState.matchType;
-                numCourtsInput.value = savedState.numCourts;
-                resultsContainer.innerHTML = savedState.resultsContainerHTML;
+                const state = JSON.parse(savedStateJSON);
+                const oneDay = 24 * 60 * 60 * 1000;
+                if (new Date().getTime() - state.timestamp > oneDay) {
+                    localStorage.removeItem('tennisMatchState');
+                    return false; // Indicate that state was expired
+                }
+
+                numPlayersInput.value = state.numPlayers;
+                matchTypeSelect.value = state.matchType;
+                numCourtsInput.value = state.numCourts;
+                resultsContainer.innerHTML = state.resultsContainerHTML;
                 
                 // Generate header since it's not saved
                 let headerHTML = '<tr>';
                 headerHTML += '<th></th>'; // For the current game marker
-                if (savedState.numCourts > 1) {
+                if (state.numCourts > 1) {
                     headerHTML += '<th>Court</th>';
                 }
                 headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
                 tableHead.innerHTML = headerHTML;
 
-                tableBody.innerHTML = savedState.tableBodyHTML;
+                tableBody.innerHTML = state.tableBodyHTML;
 
                 // The class 'current-game' is already saved in the HTML, so we just need to ensure the marker is correct.
                 // All rows will be updated by this loop.
                 tableBody.querySelectorAll('tr').forEach(row => updateRowMarker(row));
-
-            } else {
-                generateSchedule();
+                return true; // Indicate that state was loaded
             }
+            return false; // Indicate no state was loaded
         }
-
-        // Generate on page load with default values or from storage
-        loadState();
 
         // Add a single event listener to the table body for handling clicks on teams.
         tableBody.addEventListener('click', (event) => {
@@ -632,6 +649,15 @@
                 saveState();
             }
         });
+
+        // Load state from localStorage on page load
+        const stateLoaded = loadState();
+
+        // Generate a default schedule if no state was loaded
+        if (!stateLoaded) {
+            scheduleGenerationSeedOffset = 0; // Ensure initial load is always the same
+            generateSchedule();
+        }
     </script>
 </body>
 </html>
