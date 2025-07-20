@@ -163,7 +163,6 @@
             <div id="qrcode" style="margin-top: 10px; display: flex; justify-content: center;"></div>
         </div>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <script>
         const numPlayersInput = document.getElementById('numPlayers');
         const matchTypeSelect = document.getElementById('matchType');
@@ -177,8 +176,13 @@
         const qrcodeDiv = document.getElementById('qrcode');
 
         let qrCodeInstance = null;
+        let scheduleGenerationSeedOffset = 0;
 
-        generateButton.addEventListener('click', generateSchedule);
+        generateButton.addEventListener('click', () => {
+            scheduleGenerationSeedOffset++;
+            generateSchedule();
+        });
+
         generateQrButton.addEventListener('click', () => {
             // Clear previous QR code
             qrcodeDiv.innerHTML = '';
@@ -192,6 +196,72 @@
                 correctLevel : QRCode.CorrectLevel.H
             });
         });
+
+        function saveState() {
+            const state = {
+                numPlayers: numPlayersInput.value,
+                matchType: matchTypeSelect.value,
+                numCourts: numCourtsInput.value,
+                scheduleHTML: tableBody.innerHTML,
+                resultsHTML: resultsContainer.innerHTML,
+                timestamp: new Date().getTime()
+            };
+            localStorage.setItem('tennisMatchState', JSON.stringify(state));
+        }
+
+        function loadState() {
+            const savedState = localStorage.getItem('tennisMatchState');
+            if (savedState) {
+                const state = JSON.parse(savedState);
+                const oneDay = 24 * 60 * 60 * 1000;
+                if (new Date().getTime() - state.timestamp > oneDay) {
+                    localStorage.removeItem('tennisMatchState');
+                    return false; // Indicate that state was expired
+                }
+
+                numPlayersInput.value = state.numPlayers;
+                matchTypeSelect.value = state.matchType;
+                numCourtsInput.value = state.numCourts;
+                tableBody.innerHTML = state.scheduleHTML;
+                resultsContainer.innerHTML = state.resultsHTML;
+                
+                // Re-generate header since it's not saved
+                generateTableHeader();
+                return true; // Indicate that state was loaded
+            }
+            return false; // Indicate no state was loaded
+        }
+
+        function generateTableHeader() {
+            const numCourts = parseInt(numCourtsInput.value);
+            let headerHTML = '<tr>';
+            headerHTML += '<th></th>'; // For the current game marker
+            if (numCourts > 1) {
+                headerHTML += '<th>Court</th>';
+            }
+            headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
+            tableHead.innerHTML = headerHTML;
+        }
+
+        function createSeededRandom(seed) {
+            let state = seed;
+            return function() {
+                state = (state * 9301 + 49297) % 233280;
+                return state / 233280;
+            };
+        }
+
+        function seededShuffle(array, seed) {
+            const random = createSeededRandom(seed);
+            let currentIndex = array.length, randomIndex;
+
+            while (currentIndex !== 0) {
+                randomIndex = Math.floor(random() * currentIndex);
+                currentIndex--;
+                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+            }
+            return array;
+        }
 
         function generateSchedule() {
             const numPlayers = parseInt(numPlayersInput.value);
@@ -260,8 +330,13 @@
                     match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
                 });
             } else { // double
-                // --- FIFO Rotation-Based Match Generation for Doubles ---
-                const players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+                // --- Seeded Shuffle for daily consistent randomness ---
+                let players = Array.from({ length: numPlayers }, (_, i) => i + 1);
+                const today = new Date();
+                const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+                const seed = dateSeed * 1000 + scheduleGenerationSeedOffset;
+                players = seededShuffle(players, seed);
+
                 const playersPerMatch = 4;
 
                 // --- Helper Functions ---
@@ -274,23 +349,30 @@
 
                 // --- State Tracking ---
                 gamesPlayed = new Map(players.map(p => [p, 0]));
+                const consecutiveGames = new Map(players.map(p => [p, 0])); // For rest priority
                 const partnershipCount = new Map();
                 const matchupCount = new Map();
 
-                // --- Initialize Queues ---
-                let playingQueue = players.slice(0, playersPerMatch);
-                let restingQueue = players.slice(playersPerMatch);
-
                 // --- Main Scheduling Loop ---
-                const numMatchesToGenerate = 15;
-                for (let i = 0; i < numMatchesToGenerate && schedule.length < numMatchesToGenerate; i++) {
-                    const activePlayers = [...playingQueue];
+                const numMatchesToGenerate = Math.max(15, Math.ceil(numPlayers / playersPerMatch) * 3); // Ensure enough matches
+
+                for (let i = 0; i < numMatchesToGenerate; i++) {
+                    // 1. Select 4 players based on rest and total games played.
+                    const sortedPlayers = [...players].sort((a, b) => {
+                        const consecutiveDiff = consecutiveGames.get(a) - consecutiveGames.get(b);
+                        if (consecutiveDiff !== 0) {
+                            return consecutiveDiff;
+                        }
+                        return gamesPlayed.get(a) - gamesPlayed.get(b);
+                    });
+
+                    const activePlayers = sortedPlayers.slice(0, 4);
 
                     if (activePlayers.length < 4) {
                         break; // Safeguard
                     }
 
-                    // 1. Find all possible pairings for the 4 active players and calculate their cost.
+                    // 2. Find all possible pairings and calculate their cost.
                     let possibleMatches = [];
                     const p = activePlayers;
                     const matchVariations = [
@@ -301,47 +383,50 @@
 
                     for (const match of matchVariations) {
                         const [team1, team2] = match;
-                        const gameCost = activePlayers.reduce((acc, player) => acc + gamesPlayed.get(player), 0);
                         const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
                         const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
                         const matchupKey = getMatchupKey(team1, team2);
                         const matchupCost = matchupCount.get(matchupKey) || 0;
                         
-                        const totalCost = gameCost + (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
+                        // Cost function to promote variety
+                        const totalCost = partnerCost1 + partnerCost2 + matchupCost * 2;
 
                         possibleMatches.push({ match: [team1, team2], cost: totalCost });
                     }
 
-                    // 2. Select the best match (lowest cost) from the possibilities.
+                    // 3. Select the best match (lowest cost).
                     possibleMatches.sort((a, b) => a.cost - b.cost);
                     
-                    if (possibleMatches.length === 0) {
-                        break; // Should not be reached if numPlayers >= 4
-                    }
-
                     const bestMatch = possibleMatches[0];
-                    const [team1, team2] = bestMatch.match;
+                    let [team1, team2] = bestMatch.match;
+
+                    // Sort players within each team for consistent display
+                    team1.sort((a, b) => a - b);
+                    team2.sort((a, b) => a - b);
+
                     schedule.push({
                         team1: { text: `${team1[0]} & ${team1[1]}`, players: team1 },
                         team2: { text: `${team2[0]} & ${team2[1]}`, players: team2 }
                     });
 
-                    // 3. Update state tracking for the next iteration.
-                    [...team1, ...team2].forEach(p => gamesPlayed.set(p, gamesPlayed.get(p) + 1));
+                    // 4. Update state for the next iteration.
+                    const playingNow = new Set(activePlayers);
+                    for (const player of players) {
+                        if (playingNow.has(player)) {
+                            gamesPlayed.set(player, gamesPlayed.get(player) + 1);
+                            consecutiveGames.set(player, consecutiveGames.get(player) + 1);
+                        } else {
+                            // Player is resting, reset consecutive games count.
+                            consecutiveGames.set(player, 0);
+                        }
+                    }
+
                     const key1 = getPartnerKey(team1);
                     const key2 = getPartnerKey(team2);
                     partnershipCount.set(key1, (partnershipCount.get(key1) || 0) + 1);
                     partnershipCount.set(key2, (partnershipCount.get(key2) || 0) + 1);
                     const matchupKey = getMatchupKey(team1, team2);
                     matchupCount.set(matchupKey, (matchupCount.get(matchupKey) || 0) + 1);
-
-                    // 4. Rotate players for the next game (FIFO).
-                    if (restingQueue.length > 0) {
-                        const playerToRest = playingQueue.shift();
-                        const playerToPlay = restingQueue.shift();
-                        playingQueue.push(playerToPlay);
-                        restingQueue.push(playerToRest);
-                    }
                 }
             }
 
@@ -354,13 +439,7 @@
             }
 
             // --- Generate Table Header ---
-            let headerHTML = '<tr>';
-            headerHTML += '<th></th>'; // For the current game marker
-            if (numCourts > 1) {
-                headerHTML += '<th>Court</th>';
-            }
-            headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
-            tableHead.innerHTML = headerHTML;
+            generateTableHeader();
 
             // --- Generate Table Body ---
             let matchIndex = 0;
@@ -430,9 +509,6 @@
             }
         }
 
-        // Generate on page load with default values
-        generateSchedule();
-
         // Add a single event listener to the table body for handling clicks on teams.
         tableBody.addEventListener('click', (event) => {
             const target = event.target;
@@ -451,6 +527,7 @@
 
                 newCurrentRow.classList.add('current-game');
                 updateRowMarker(newCurrentRow);
+                saveState(); // Save state after changing current game
                 return; // Action is complete
             }
 
@@ -506,8 +583,18 @@
                     }
                 }
                 updateRowMarker(row);
+                saveState(); // Save state after updating winner
             }
         });
+
+        // Load state from localStorage on page load
+        const stateLoaded = loadState();
+
+        // Generate a default schedule if no state was loaded
+        if (!stateLoaded) {
+            scheduleGenerationSeedOffset = 0; // Ensure initial load is always the same
+            generateSchedule();
+        }
     </script>
 </body>
 </html>
