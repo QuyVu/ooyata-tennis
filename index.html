@@ -226,8 +226,7 @@
             };
         }
 
-        function seededShuffle(array, seed) {
-            const random = createSeededRandom(seed);
+        function seededShuffle(array, random) {
             let currentIndex = array.length, randomIndex;
 
             while (currentIndex !== 0) {
@@ -310,7 +309,8 @@
                 const today = new Date();
                 const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
                 const seed = dateSeed * 1000 + scheduleGenerationSeedOffset;
-                players = seededShuffle(players, seed);
+                const seededRandom = createSeededRandom(seed);
+                players = seededShuffle(players, seededRandom);
 
                 // --- Helper Functions ---
                 const getPartnerKey = (p) => p.slice().sort().join('&');
@@ -368,7 +368,7 @@
                         }
                         
                         // Tie-break with a random factor to vary player selection in case of ties
-                        return Math.random() - 0.5;
+                        return seededRandom() - 0.5;
                     });
                     const activePlayers = sortedPlayers.slice(0, 4);
 
