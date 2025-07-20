@@ -179,8 +179,18 @@
         let scheduleGenerationSeedOffset = 0;
 
         generateButton.addEventListener('click', () => {
-            scheduleGenerationSeedOffset++;
-            generateSchedule();
+            const generate = () => {
+                scheduleGenerationSeedOffset++;
+                generateSchedule();
+            };
+
+            if (tableBody.innerHTML.trim() !== '') {
+                if (confirm('Are you sure you want to generate a new schedule? This will erase the current one.')) {
+                    generate();
+                }
+            } else {
+                generate();
+            }
         });
 
         generateQrButton.addEventListener('click', () => {
@@ -196,41 +206,6 @@
                 correctLevel : QRCode.CorrectLevel.H
             });
         });
-
-        function saveState() {
-            const state = {
-                numPlayers: numPlayersInput.value,
-                matchType: matchTypeSelect.value,
-                numCourts: numCourtsInput.value,
-                scheduleHTML: tableBody.innerHTML,
-                resultsHTML: resultsContainer.innerHTML,
-                timestamp: new Date().getTime()
-            };
-            localStorage.setItem('tennisMatchState', JSON.stringify(state));
-        }
-
-        function loadState() {
-            const savedState = localStorage.getItem('tennisMatchState');
-            if (savedState) {
-                const state = JSON.parse(savedState);
-                const oneDay = 24 * 60 * 60 * 1000;
-                if (new Date().getTime() - state.timestamp > oneDay) {
-                    localStorage.removeItem('tennisMatchState');
-                    return false; // Indicate that state was expired
-                }
-
-                numPlayersInput.value = state.numPlayers;
-                matchTypeSelect.value = state.matchType;
-                numCourtsInput.value = state.numCourts;
-                tableBody.innerHTML = state.scheduleHTML;
-                resultsContainer.innerHTML = state.resultsHTML;
-                
-                // Re-generate header since it's not saved
-                generateTableHeader();
-                return true; // Indicate that state was loaded
-            }
-            return false; // Indicate no state was loaded
-        }
 
         function generateTableHeader() {
             const numCourts = parseInt(numCourtsInput.value);
@@ -337,8 +312,6 @@
                 const seed = dateSeed * 1000 + scheduleGenerationSeedOffset;
                 players = seededShuffle(players, seed);
 
-                const playersPerMatch = 4;
-
                 // --- Helper Functions ---
                 const getPartnerKey = (p) => p.slice().sort().join('&');
                 const getMatchupKey = (p1, p2) => {
@@ -353,26 +326,57 @@
                 const partnershipCount = new Map();
                 const matchupCount = new Map();
 
+                // --- Calculate number of matches for fair distribution ---
+                // 1. Find the minimum number of games per player (k) for a balanced set of matches.
+                let minGamesPerPlayer = (numPlayers % 4 === 0) ? 1 : (numPlayers % 2 === 0) ? 2 : 4;
+
+                // 2. Aim for a target of at least 4 games per player for a good session length.
+                let targetGamesPerPlayer = minGamesPerPlayer;
+                if (targetGamesPerPlayer < 4) {
+                    // Multiply rounds to get closer to the target
+                    targetGamesPerPlayer *= Math.ceil(4 / targetGamesPerPlayer);
+                }
+                
+                let numMatchesToGenerate = (numPlayers * targetGamesPerPlayer) / 4;
+
+                // 3. Ensure there are at least 15 matches in total for a substantial session.
+                const minTotalMatches = 15;
+                if (numMatchesToGenerate < minTotalMatches) {
+                    const minMatchesPerRound = (numPlayers * minGamesPerPlayer) / 4;
+                    if (minMatchesPerRound > 0) { // Avoid division by zero
+                        const roundsNeeded = Math.ceil(minTotalMatches / minMatchesPerRound);
+                        numMatchesToGenerate = minMatchesPerRound * roundsNeeded;
+                    } else {
+                        numMatchesToGenerate = 0; // Should not happen with validation
+                    }
+                }
+
                 // --- Main Scheduling Loop ---
-                const numMatchesToGenerate = Math.max(15, Math.ceil(numPlayers / playersPerMatch) * 3); // Ensure enough matches
-
                 for (let i = 0; i < numMatchesToGenerate; i++) {
-                    // 1. Select 4 players based on rest and total games played.
+                    // 1. Select the 4 players based on rest priority and then fewest games.
                     const sortedPlayers = [...players].sort((a, b) => {
-                        const consecutiveDiff = consecutiveGames.get(a) - consecutiveGames.get(b);
-                        if (consecutiveDiff !== 0) {
-                            return consecutiveDiff;
+                        const streakA = consecutiveGames.get(a) || 0;
+                        const streakB = consecutiveGames.get(b) || 0;
+                        if (streakA !== streakB) {
+                            return streakA - streakB; // Prioritize players with shorter streaks (more rest).
                         }
-                        return gamesPlayed.get(a) - gamesPlayed.get(b);
-                    });
 
+                        const gamesA = gamesPlayed.get(a);
+                        const gamesB = gamesPlayed.get(b);
+                        if (gamesA !== gamesB) {
+                            return gamesA - gamesB; // Then, prioritize players with fewer total games.
+                        }
+                        
+                        // Tie-break with a random factor to vary player selection in case of ties
+                        return Math.random() - 0.5;
+                    });
                     const activePlayers = sortedPlayers.slice(0, 4);
 
                     if (activePlayers.length < 4) {
                         break; // Safeguard
                     }
 
-                    // 2. Find all possible pairings and calculate their cost.
+                    // 2. Find all possible pairings for the active players and calculate their cost.
                     let possibleMatches = [];
                     const p = activePlayers;
                     const matchVariations = [
@@ -383,22 +387,27 @@
 
                     for (const match of matchVariations) {
                         const [team1, team2] = match;
+                        // Cost function now only needs to focus on partnership and matchup history,
+                        // as game balance is handled by the player selection process.
                         const partnerCost1 = partnershipCount.get(getPartnerKey(team1)) || 0;
                         const partnerCost2 = partnershipCount.get(getPartnerKey(team2)) || 0;
                         const matchupKey = getMatchupKey(team1, team2);
                         const matchupCost = matchupCount.get(matchupKey) || 0;
                         
-                        // Cost function to promote variety
-                        const totalCost = partnerCost1 + partnerCost2 + matchupCost * 2;
+                        const totalCost = (partnerCost1 + partnerCost2) * numPlayers + matchupCost * numPlayers * numPlayers;
 
                         possibleMatches.push({ match: [team1, team2], cost: totalCost });
                     }
 
-                    // 3. Select the best match (lowest cost).
+                    // 3. Select the best match (lowest cost) from the possibilities.
                     possibleMatches.sort((a, b) => a.cost - b.cost);
                     
+                    if (possibleMatches.length === 0) {
+                        break; // Should not be reached
+                    }
+
                     const bestMatch = possibleMatches[0];
-                    let [team1, team2] = bestMatch.match;
+                    const [team1, team2] = bestMatch.match;
 
                     // Sort players within each team for consistent display
                     team1.sort((a, b) => a - b);
@@ -409,17 +418,17 @@
                         team2: { text: `${team2[0]} & ${team2[1]}`, players: team2 }
                     });
 
-                    // 4. Update state for the next iteration.
-                    const playingNow = new Set(activePlayers);
-                    for (const player of players) {
-                        if (playingNow.has(player)) {
-                            gamesPlayed.set(player, gamesPlayed.get(player) + 1);
-                            consecutiveGames.set(player, consecutiveGames.get(player) + 1);
+                    // 4. Update state tracking for the next iteration.
+                    const playingPlayerIds = new Set([...team1, ...team2]);
+                    
+                    players.forEach(p => {
+                        if (playingPlayerIds.has(p)) {
+                            gamesPlayed.set(p, gamesPlayed.get(p) + 1);
+                            consecutiveGames.set(p, (consecutiveGames.get(p) || 0) + 1);
                         } else {
-                            // Player is resting, reset consecutive games count.
-                            consecutiveGames.set(player, 0);
+                            consecutiveGames.set(p, 0); // Reset streak for resting players
                         }
-                    }
+                    });
 
                     const key1 = getPartnerKey(team1);
                     const key2 = getPartnerKey(team2);
@@ -468,6 +477,7 @@
                 firstMatchRow.classList.add('current-game');
                 updateRowMarker(firstMatchRow);
             }
+            saveState();
         }
 
         function displayResults(playerIds) {
@@ -509,6 +519,59 @@
             }
         }
 
+        function saveState() {
+            if (!tableBody.innerHTML) { // Don't save an empty state
+                localStorage.removeItem('tennisMatchState');
+                return;
+            }
+            const currentRow = tableBody.querySelector('.current-game');
+            const state = {
+                numPlayers: numPlayersInput.value,
+                matchType: matchTypeSelect.value,
+                numCourts: numCourtsInput.value,
+                tableBodyHTML: tableBody.innerHTML,
+                resultsContainerHTML: resultsContainer.innerHTML,
+                // Find the index of the current row to restore the marker
+                currentRowIndex: currentRow ? Array.from(tableBody.children).indexOf(currentRow) : -1,
+                timestamp: new Date().getTime()
+            };
+            localStorage.setItem('tennisMatchState', JSON.stringify(state));
+        }
+
+        function loadState() {
+            const savedStateJSON = localStorage.getItem('tennisMatchState');
+            if (savedStateJSON) {
+                const state = JSON.parse(savedStateJSON);
+                const oneDay = 24 * 60 * 60 * 1000;
+                if (new Date().getTime() - state.timestamp > oneDay) {
+                    localStorage.removeItem('tennisMatchState');
+                    return false; // Indicate that state was expired
+                }
+
+                numPlayersInput.value = state.numPlayers;
+                matchTypeSelect.value = state.matchType;
+                numCourtsInput.value = state.numCourts;
+                resultsContainer.innerHTML = state.resultsContainerHTML;
+                
+                // Generate header since it's not saved
+                let headerHTML = '<tr>';
+                headerHTML += '<th></th>'; // For the current game marker
+                if (state.numCourts > 1) {
+                    headerHTML += '<th>Court</th>';
+                }
+                headerHTML += '<th>Team 1</th><th>Team 2</th></tr>';
+                tableHead.innerHTML = headerHTML;
+
+                tableBody.innerHTML = state.tableBodyHTML;
+
+                // The class 'current-game' is already saved in the HTML, so we just need to ensure the marker is correct.
+                // All rows will be updated by this loop.
+                tableBody.querySelectorAll('tr').forEach(row => updateRowMarker(row));
+                return true; // Indicate that state was loaded
+            }
+            return false; // Indicate no state was loaded
+        }
+
         // Add a single event listener to the table body for handling clicks on teams.
         tableBody.addEventListener('click', (event) => {
             const target = event.target;
@@ -527,7 +590,7 @@
 
                 newCurrentRow.classList.add('current-game');
                 updateRowMarker(newCurrentRow);
-                saveState(); // Save state after changing current game
+                saveState();
                 return; // Action is complete
             }
 
@@ -583,7 +646,7 @@
                     }
                 }
                 updateRowMarker(row);
-                saveState(); // Save state after updating winner
+                saveState();
             }
         });
 
