@@ -141,7 +141,6 @@
                 <label for="numCourts">Number of Courts:</label>
                 <input type="number" id="numCourts" min="1" value="1">
             </div>
-            <button id="generateMatches">Generate Matches</button>
             <div id="error-message"></div>
         </div>
         
@@ -160,6 +159,7 @@
         </div>
         <div id="qrcode-container" style="margin-top: 20px;">
             <button id="generateQrCode">Share Match Link</button>
+            <button id="resetStorage">Reset Data</button>
             <div id="qrcode" style="margin-top: 10px; display: flex; justify-content: center;"></div>
         </div>
     </div>
@@ -167,31 +167,20 @@
         const numPlayersInput = document.getElementById('numPlayers');
         const matchTypeSelect = document.getElementById('matchType');
         const numCourtsInput = document.getElementById('numCourts');
-        const generateButton = document.getElementById('generateMatches');
         const tableHead = document.querySelector('#matchTable thead');
         const tableBody = document.querySelector('#matchTable tbody');
         const resultsContainer = document.getElementById('resultsContainer');
         const errorMessageDiv = document.getElementById('error-message');
         const generateQrButton = document.getElementById('generateQrCode');
+        const resetStorageButton = document.getElementById('resetStorage');
         const qrcodeDiv = document.getElementById('qrcode');
 
         let qrCodeInstance = null;
-        let scheduleGenerationSeedOffset = 0;
 
-        generateButton.addEventListener('click', () => {
-            const generate = () => {
-                scheduleGenerationSeedOffset++;
-                generateSchedule();
-            };
-
-            if (tableBody.innerHTML.trim() !== '') {
-                if (confirm('Are you sure you want to generate a new schedule? This will erase the current one.')) {
-                    generate();
-                }
-            } else {
-                generate();
-            }
-        });
+        // Auto-generate matches when inputs change
+        numPlayersInput.addEventListener('change', generateSchedule);
+        matchTypeSelect.addEventListener('change', generateSchedule);
+        numCourtsInput.addEventListener('change', generateSchedule);
 
         generateQrButton.addEventListener('click', () => {
             // Clear previous QR code
@@ -207,6 +196,22 @@
             });
         });
 
+        resetStorageButton.addEventListener('click', () => {
+            if (confirm('Are you sure you want to reset all saved data? This will erase your current match progress and cannot be undone.')) {
+                // Clear localStorage
+                localStorage.removeItem('tennisMatchState');
+                
+                // Regenerate the schedule with fresh state
+                generateSchedule();
+                
+                // Clear QR code if it exists
+                qrcodeDiv.innerHTML = '';
+                
+                // Show confirmation
+                alert('Data has been reset successfully!');
+            }
+        });
+
         function generateTableHeader() {
             const numCourts = parseInt(numCourtsInput.value);
             let headerHTML = '<tr>';
@@ -218,24 +223,6 @@
             tableHead.innerHTML = headerHTML;
         }
 
-        function createSeededRandom(seed) {
-            let state = seed;
-            return function() {
-                state = (state * 9301 + 49297) % 233280;
-                return state / 233280;
-            };
-        }
-
-        function seededShuffle(array, random) {
-            let currentIndex = array.length, randomIndex;
-
-            while (currentIndex !== 0) {
-                randomIndex = Math.floor(random() * currentIndex);
-                currentIndex--;
-                [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
-            }
-            return array;
-        }
 
         function generateSchedule() {
             const numPlayers = parseInt(numPlayersInput.value);
@@ -304,13 +291,8 @@
                     match.team2.players.forEach(p => gamesPlayed.set(`${p}`, (gamesPlayed.get(`${p}`) || 0) + 1));
                 });
             } else { // double
-                // --- Seeded Shuffle for daily consistent randomness ---
+                // --- Deterministic player order ---
                 let players = Array.from({ length: numPlayers }, (_, i) => i + 1);
-                const today = new Date();
-                const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
-                const seed = dateSeed * 1000 + scheduleGenerationSeedOffset;
-                const seededRandom = createSeededRandom(seed);
-                players = seededShuffle(players, seededRandom);
 
                 // --- Helper Functions ---
                 const getPartnerKey = (p) => p.slice().sort().join('&');
@@ -367,8 +349,8 @@
                             return gamesA - gamesB; // Then, prioritize players with fewer total games.
                         }
                         
-                        // Tie-break with a random factor to vary player selection in case of ties
-                        return seededRandom() - 0.5;
+                        // Deterministic tie-break based on player ID
+                        return a - b;
                     });
                     const activePlayers = sortedPlayers.slice(0, 4);
 
@@ -655,7 +637,6 @@
 
         // Generate a default schedule if no state was loaded
         if (!stateLoaded) {
-            scheduleGenerationSeedOffset = 0; // Ensure initial load is always the same
             generateSchedule();
         }
     </script>
